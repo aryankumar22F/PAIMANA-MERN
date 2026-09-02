@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import * as d3 from "d3-geo";
-import { scaleLinear } from "d3-scale";
+import { scaleLinear, scaleSequential } from "d3-scale";
+import { interpolateRgb } from "d3-interpolate";
 import {
   FileText,
   IndianRupee,
@@ -14,7 +15,6 @@ import {
 const INDIA_GEOJSON_URL =
   "https://raw.githubusercontent.com/geohacker/india/master/state/india_state.geojson";
 
-// Fallback: state name normalization map (same as before)
 const STATE_NAME_MAP = {
   "Andaman and Nicobar": "Andaman & Nicobar Islands",
   "Andhra Pradesh": "Andhra Pradesh",
@@ -60,6 +60,9 @@ const STATE_NAME_MAP = {
 const IndiaInteractiveMap = ({ projects = [] }) => {
   const [geoData, setGeoData] = useState(null);
   const [selectedState, setSelectedState] = useState(null);
+  const [hoveredState, setHoveredState] = useState(null);
+  const [tooltip, setTooltip] = useState({ show: false, x: 0, y: 0, name: "", count: 0 });
+  const svgRef = useRef(null);
 
   useEffect(() => {
     fetch(INDIA_GEOJSON_URL)
@@ -98,11 +101,13 @@ const IndiaInteractiveMap = ({ projects = [] }) => {
     return mx;
   }, [stateStats]);
 
-  // Color scale matching PAIMANA exactly: Light Yellow -> Orange -> Deep Red
-  const colorScale = scaleLinear()
-    .domain([0, maxCount * 0.4, maxCount]) // Midpoint for orange
-    .range(["#FFF4D2", "#F6A57B", "#D9534F"])
-    .clamp(true);
+  // Exact PAIMANA color scale: Pale Yellow → Light Peach → Salmon → Deep Red
+  const colorScale = useMemo(() => {
+    return scaleLinear()
+      .domain([0, maxCount * 0.15, maxCount * 0.35, maxCount * 0.6, maxCount])
+      .range(["#F7F4D5", "#FCDBB0", "#F6A57B", "#D96A5B", "#C84C4C"])
+      .clamp(true);
+  }, [maxCount]);
 
   const matchState = (geoName) => {
     if (stateStats[geoName]) return stateStats[geoName];
@@ -119,17 +124,18 @@ const IndiaInteractiveMap = ({ projects = [] }) => {
     return null;
   };
 
-  // Map Projection setup using D3
-  const width = 600;
-  const height = 650;
-  // Fit India properly in the viewBox
-  const projection = d3
-    .geoMercator()
-    .center([82.5, 23.5]) // Center of India
-    .scale(1000)
-    .translate([width / 2, height / 2]);
+  // Map Projection - tuned to match PAIMANA portal exactly
+  const width = 800;
+  const height = 850;
+  const projection = useMemo(() => {
+    return d3
+      .geoMercator()
+      .center([82, 23])
+      .scale(1300)
+      .translate([width / 2, height / 2]);
+  }, []);
 
-  const pathGenerator = d3.geoPath().projection(projection);
+  const pathGenerator = useMemo(() => d3.geoPath().projection(projection), [projection]);
 
   // Active Dossier Data for Left Panel
   const activeDossier = useMemo(() => {
@@ -143,7 +149,6 @@ const IndiaInteractiveMap = ({ projects = [] }) => {
         expenditure: s.expenditure,
       };
     }
-    // All India
     let count = 0, orig = 0, rev = 0, exp = 0;
     projects.forEach((p) => {
       count++;
@@ -159,6 +164,35 @@ const IndiaInteractiveMap = ({ projects = [] }) => {
       expenditure: exp,
     };
   }, [selectedState, stateStats, projects]);
+
+  const handleMouseMove = (e, name, count) => {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    setTooltip({
+      show: true,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top - 12,
+      name,
+      count,
+    });
+  };
+
+  // Format numbers in Indian style: 33,70,138.22
+  const formatIndian = (num) => {
+    const fixed = num.toFixed(2);
+    const [intPart, decPart] = fixed.split(".");
+    // Indian grouping: last 3 digits, then groups of 2
+    let result = "";
+    const digits = intPart.split("");
+    const len = digits.length;
+    for (let i = 0; i < len; i++) {
+      const posFromEnd = len - 1 - i;
+      result += digits[i];
+      if (posFromEnd > 0 && posFromEnd === 3 && i < len - 1) result += ",";
+      else if (posFromEnd > 3 && (posFromEnd - 3) % 2 === 0 && i < len - 1) result += ",";
+    }
+    return result + "." + decPart;
+  };
 
   return (
     <div className="paimana-map-section">
@@ -186,7 +220,7 @@ const IndiaInteractiveMap = ({ projects = [] }) => {
               <IndianRupee className="paimana-stat-icon" />
               <div className="paimana-stat-content">
                 <h5>Original Cost (in Cr.) <Info className="info-icon" /></h5>
-                <p>₹ {activeDossier.originalCost.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+                <p>₹ {formatIndian(activeDossier.originalCost)}</p>
               </div>
             </div>
 
@@ -194,7 +228,7 @@ const IndiaInteractiveMap = ({ projects = [] }) => {
               <Briefcase className="paimana-stat-icon" />
               <div className="paimana-stat-content">
                 <h5>Latest Revised Cost (in Cr.) <Info className="info-icon" /></h5>
-                <p>₹ {activeDossier.revisedCost.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+                <p>₹ {formatIndian(activeDossier.revisedCost)}</p>
               </div>
             </div>
 
@@ -202,7 +236,7 @@ const IndiaInteractiveMap = ({ projects = [] }) => {
               <TrendingUp className="paimana-stat-icon" />
               <div className="paimana-stat-content">
                 <h5>Expenditure(Cumm.) (in Cr.) <Info className="info-icon" /></h5>
-                <p>₹ {activeDossier.expenditure.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+                <p>₹ {formatIndian(activeDossier.expenditure)}</p>
               </div>
             </div>
 
@@ -229,40 +263,86 @@ const IndiaInteractiveMap = ({ projects = [] }) => {
           {!geoData ? (
             <div style={{ color: "#374151" }}>Loading Map...</div>
           ) : (
-            <svg
-              viewBox={`0 0 ${width} ${height}`}
-              className="paimana-svg-map"
-              preserveAspectRatio="xMidYMid meet"
-            >
-              <g>
-                {geoData.features.map((feature, i) => {
-                  const name =
-                    feature.properties.NAME_1 ||
-                    feature.properties.name ||
-                    feature.properties.NAME;
-                  const stat = matchState(name);
-                  const count = stat ? stat.count : 0;
-                  const isSelected = selectedState && stat && stat.name === selectedState;
+            <div style={{ position: "relative" }}>
+              <svg
+                ref={svgRef}
+                viewBox={`0 0 ${width} ${height}`}
+                className="paimana-svg-map"
+                preserveAspectRatio="xMidYMid meet"
+              >
+                {/* Drop shadow filter */}
+                <defs>
+                  <filter id="mapShadow" x="-5%" y="-5%" width="110%" height="110%">
+                    <feDropShadow dx="0" dy="4" stdDeviation="6" floodColor="#00000020" />
+                  </filter>
+                </defs>
+                <g filter="url(#mapShadow)">
+                  {geoData.features.map((feature, i) => {
+                    const name =
+                      feature.properties.NAME_1 ||
+                      feature.properties.name ||
+                      feature.properties.NAME;
+                    const stat = matchState(name);
+                    const count = stat ? stat.count : 0;
+                    const displayName = stat ? stat.name : name;
+                    const isHovered = hoveredState === displayName;
+                    const isSelected = selectedState === displayName;
 
-                  return (
-                    <path
-                      key={i}
-                      d={pathGenerator(feature)}
-                      className="state-path"
-                      fill={isSelected ? "#003366" : count === 0 ? "#FFF4D2" : colorScale(count)}
-                      onClick={() => {
-                        const stateName = stat ? stat.name : name;
-                        setSelectedState((prev) => (prev === stateName ? null : stateName));
-                      }}
-                      title={`${name}: ${count} projects`}
-                    />
-                  );
-                })}
-              </g>
-            </svg>
+                    return (
+                      <path
+                        key={i}
+                        d={pathGenerator(feature)}
+                        fill={count === 0 ? "#F7F4D5" : colorScale(count)}
+                        stroke={isHovered || isSelected ? "#2D4030" : "#4A5568"}
+                        strokeWidth={isHovered || isSelected ? 1.8 : 0.7}
+                        style={{
+                          cursor: "pointer",
+                          filter: isHovered ? "brightness(0.88)" : "none",
+                        }}
+                        onClick={() => {
+                          setSelectedState((prev) => (prev === displayName ? null : displayName));
+                        }}
+                        onMouseEnter={() => setHoveredState(displayName)}
+                        onMouseMove={(e) => handleMouseMove(e, displayName, count)}
+                        onMouseLeave={() => {
+                          setHoveredState(null);
+                          setTooltip({ show: false, x: 0, y: 0, name: "", count: 0 });
+                        }}
+                      />
+                    );
+                  })}
+                </g>
+              </svg>
+
+              {/* Tooltip on hover */}
+              {tooltip.show && (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: tooltip.x,
+                    top: tooltip.y,
+                    transform: "translate(-50%, -100%)",
+                    background: "rgba(11, 27, 61, 0.92)",
+                    color: "#fff",
+                    padding: "6px 12px",
+                    borderRadius: "6px",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    pointerEvents: "none",
+                    whiteSpace: "nowrap",
+                    boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+                    zIndex: 10,
+                  }}
+                >
+                  <span style={{ fontWeight: 800 }}>{tooltip.name}</span>
+                  <br />
+                  <span style={{ fontSize: "11px", opacity: 0.85 }}>{tooltip.count} Projects</span>
+                </div>
+              )}
+            </div>
           )}
           
-          {/* Legend Bar on the right */}
+          {/* Vertical Legend Bar - exactly like PAIMANA */}
           <div className="paimana-legend">
             <div className="paimana-legend-bar"></div>
             <div className="paimana-legend-labels">

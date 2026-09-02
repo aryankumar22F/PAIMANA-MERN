@@ -91,7 +91,7 @@ const Dashboard = () => {
       <div className="loading-box" style={{ color: "#dc2626" }}>
         <AlertTriangle size={36} />
         <h3 style={{ fontSize: "16px", fontWeight: 700 }}>Connection Error</h3>
-        <p>{error}</p>
+        <p>{lerror}</p>
         <button className="btn btn-primary" onClick={fetchData} style={{ marginTop: "12px" }}>
           <RefreshCw size={14} /> Retry Connection
         </button>
